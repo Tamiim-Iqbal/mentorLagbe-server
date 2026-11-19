@@ -163,5 +163,5 @@ app.listen(process.env.PORT || 8000, () => {
   console.log(`MentorLagbe server is running on port ${PORT}`);
 });
 
-// Export Express app
-module.exports = app;
+// Export Express App for Vercel
+export default app;
