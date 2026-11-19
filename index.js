@@ -44,7 +44,31 @@ app.get('/users', async (req, res) => {
     res.send(result);
 })
 
+// Mentor related APIs : My Tuitions
+app.get('/my-tuitions', async (req, res) => {
+    try{
+        const email = req.query.email;
 
+        if (!email) {
+            return res.status(400).json({
+                error: "Email is required"
+            })
+        }
+        const myTuitions = await tuitionsCollection
+        .find({ tutorEmail: email })
+        .sort({ createdAt: -1 })
+        .toArray();
+
+        res.status(200).json(myTuitions);
+    }
+    catch (error){
+        console.error("Error fetching my tuitions:", error);
+        res.status(500).json({
+            error: "Failed to fetch my tuitions",
+        });
+    }
+
+});
 
 
 app.get("/", (req, res) => {
