@@ -37,6 +37,7 @@ const database = connectedClient.db("mentorlagbe");
 const usersCollection = database.collection("user");
 const tuitionsCollection = database.collection("tuitions");
 const applicantsCollection = database.collection("applicants");
+const savedTuitionsCollection = database.collection("savedTuitions");
 
 // Get users 
 app.get('/users', async (req, res) => {
@@ -98,6 +99,60 @@ app.get('/applicants', async (req, res) => {
     }
 });
 
+
+// Student related APIs : My Applications
+app.get('/my-applications', async (req, res) => {
+    try {
+        const email = req.query.email;
+
+        if (!email) {
+            return res.status(400).json({
+                error: "Email is required"
+            });
+        }
+
+        const myApplications = await applicantsCollection
+            .find({ studentEmail: email })
+            .sort({ appliedAt: -1 })
+            .toArray();
+
+        res.status(200).json(myApplications);
+    }
+    catch (error) {
+        console.error("Error fetching my applications:", error);
+
+        res.status(500).json({
+            error: "Failed to fetch my applications",
+        });
+    }
+});
+
+// Student related APIs : My Saved Tuitions
+app.get('/saved-tuitions', async (req, res) => {
+    try {
+        const email = req.query.email;
+
+        if (!email) {
+            return res.status(400).json({
+                error: "Email is required"
+            });
+        }
+
+        const savedTuitions = await savedTuitionsCollection
+            .find({ studentEmail: email })
+            .sort({ savedAt: -1 })
+            .toArray();
+
+        res.status(200).json(savedTuitions);
+    }
+    catch (error) {
+        console.error("Error fetching saved tuitions:", error);
+
+        res.status(500).json({
+            error: "Failed to fetch saved tuitions",
+        });
+    }
+});
 
 app.get("/", (req, res) => {
   res.send("MentorLagbe server is running");
