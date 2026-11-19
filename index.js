@@ -36,6 +36,7 @@ const connectedClient = await connectToMongoDB();
 const database = connectedClient.db("mentorlagbe");
 const usersCollection = database.collection("user");
 const tuitionsCollection = database.collection("tuitions");
+const applicantsCollection = database.collection("applicants");
 
 // Get users 
 app.get('/users', async (req, res) => {
@@ -68,6 +69,33 @@ app.get('/my-tuitions', async (req, res) => {
         });
     }
 
+});
+
+// Mentor related APIs : My Applicants
+app.get('/applicants', async (req, res) => {
+    try {
+        const email = req.query.email;
+
+        if (!email) {
+            return res.status(400).json({
+                error: "Email is required"
+            });
+        }
+
+        const myApplicants = await applicantsCollection
+            .find({ tutorEmail: email })
+            .sort({ appliedAt: -1 })
+            .toArray();
+
+        res.status(200).json(myApplicants);
+    }
+    catch (error) {
+        console.error("Error fetching my applicants:", error);
+
+        res.status(500).json({
+            error: "Failed to fetch my applicants",
+        });
+    }
 });
 
 
