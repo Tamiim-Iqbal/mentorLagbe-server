@@ -99,17 +99,47 @@ app.get('/applicants', async (req, res) => {
     }
 });
 
-// Mentor related APIs: Add a New Tuition
+// Mentor related APIs : Post Tuition
 app.post("/tuitions", async (req, res) => {
     try {
+        const { tutorEmail } = req.body;
+
+        // 1. Check tutor email
+        if (!tutorEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Tutor email is required.",
+            });
+        }
+
+        // 2. Find user from database
+        const user = await usersCollection.findOne({
+            email: tutorEmail,
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found.",
+            });
+        }
+
+        // 3. Count existing tuition posts
+        const totalPosts = await tuitionsCollection.countDocuments({
+            tutorEmail: tutorEmail,
+        });
+
+        // 4. Free users can post maximum 2 tuitions
+        if (user.isPro !== true && totalPosts >= 2) {
+            return res.status(403).json({
+                success: false,
+                message: "Free users can post a maximum of 2 tuitions. Upgrade to Pro for unlimited posts.",
+            });
+        }
+
+        // 5. Create new tuition
         const newTuition = {
             ...req.body,
-
-            // Default values
-            approvalStatus: "pending",
-            isActive: true,
-
-            // Creation date
             createdAt: new Date(),
         };
 
@@ -117,7 +147,7 @@ app.post("/tuitions", async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "Tuition posted successfully",
+            message: "Tuition posted successfully.",
             insertedId: result.insertedId,
         });
 
@@ -126,12 +156,10 @@ app.post("/tuitions", async (req, res) => {
 
         res.status(500).json({
             success: false,
-            message: "Failed to post tuition",
+            message: "Failed to post tuition.",
         });
     }
 });
-
-
 
 
 // Student related APIs : My Applications
