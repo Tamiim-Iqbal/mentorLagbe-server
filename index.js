@@ -36,7 +36,7 @@ const connectedClient = await connectToMongoDB();
 const database = connectedClient.db("mentorlagbe");
 const usersCollection = database.collection("user");
 const tuitionsCollection = database.collection("tuitions");
-const applicantsCollection = database.collection("applicants");
+const applicationsCollection = database.collection("applications");
 const savedTuitionsCollection = database.collection("savedTuitions");
 
 // Get users 
@@ -83,7 +83,7 @@ app.get('/applicants', async (req, res) => {
             });
         }
 
-        const myApplicants = await applicantsCollection
+        const myApplicants = await applicationsCollection
             .find({ tutorEmail: email })
             .sort({ appliedAt: -1 })
             .toArray();
@@ -111,7 +111,7 @@ app.get('/my-applications', async (req, res) => {
             });
         }
 
-        const myApplications = await applicantsCollection
+        const myApplications = await applicationsCollection
             .find({ studentEmail: email })
             .sort({ appliedAt: -1 })
             .toArray();
