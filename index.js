@@ -99,6 +99,40 @@ app.get('/applicants', async (req, res) => {
     }
 });
 
+// Mentor related APIs: Add a New Tuition
+app.post("/tuitions", async (req, res) => {
+    try {
+        const newTuition = {
+            ...req.body,
+
+            // Default values
+            approvalStatus: "pending",
+            isActive: true,
+
+            // Creation date
+            createdAt: new Date(),
+        };
+
+        const result = await tuitionsCollection.insertOne(newTuition);
+
+        res.status(201).json({
+            success: true,
+            message: "Tuition posted successfully",
+            insertedId: result.insertedId,
+        });
+
+    } catch (error) {
+        console.error("Error posting tuition:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to post tuition",
+        });
+    }
+});
+
+
+
 
 // Student related APIs : My Applications
 app.get('/my-applications', async (req, res) => {
