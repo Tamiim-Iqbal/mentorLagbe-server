@@ -200,20 +200,25 @@ app.post("/tuitions", async (req, res) => {
             });
         }
 
-        // 3. Count existing tuition posts
-        const totalPosts = await tuitionsCollection.countDocuments({
-            tutorEmail: tutorEmail,
-        });
-
-        // 4. Free users can post maximum 2 tuitions
-        if (user.isPro !== true && totalPosts >= 2) {
-            return res.status(403).json({
-                success: false,
-                message: "Free users can post a maximum of 2 tuitions. Upgrade to Pro for unlimited posts.",
+        // 3. Check Free plan limit
+        if (user.isPro !== true) {
+            const totalPosts = await tuitionsCollection.countDocuments({
+                tutorEmail,
             });
+
+            if (totalPosts >= 2) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "Free users can post a maximum of 2 tuitions. Upgrade to Pro for unlimited posts.",
+                    limitReached: true,
+                    currentPosts: totalPosts,
+                    maxPosts: 2,
+                });
+            }
         }
 
-        // 5. Create new tuition
+        // 4. Create new tuition
         const newTuition = {
             ...req.body,
             createdAt: new Date(),
@@ -221,7 +226,7 @@ app.post("/tuitions", async (req, res) => {
 
         const result = await tuitionsCollection.insertOne(newTuition);
 
-        res.status(201).json({
+        return res.status(201).json({
             success: true,
             message: "Tuition posted successfully.",
             insertedId: result.insertedId,
@@ -230,9 +235,55 @@ app.post("/tuitions", async (req, res) => {
     } catch (error) {
         console.error("Error posting tuition:", error);
 
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
             message: "Failed to post tuition.",
+        });
+    }
+});
+
+// Get Tutor Tuition Posting Limit
+app.get("/tuitions/limit/:email", async (req, res) => {
+    try {
+        const { email } = req.params;
+
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                message: "Tutor email is required.",
+            });
+        }
+
+        const user = await usersCollection.findOne({
+            email,
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found.",
+            });
+        }
+
+        const totalPosts = await tuitionsCollection.countDocuments({
+            tutorEmail: email,
+        });
+
+        const isPro = user.isPro === true;
+
+        return res.status(200).json({
+            success: true,
+            totalPosts,
+            maxPosts: isPro ? null : 2,
+            isPro,
+            isLimitReached: !isPro && totalPosts >= 2,
+        });
+    } catch (error) {
+        console.error("Error fetching tuition limit:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch tuition limit.",
         });
     }
 });
