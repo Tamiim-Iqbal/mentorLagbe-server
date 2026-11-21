@@ -242,7 +242,7 @@ app.post("/tuitions", async (req, res) => {
     }
 });
 
-// Get Tutor Tuition Posting Limit
+// Get Mentor Tuition Posting Limit
 app.get("/tuitions/limit/:email", async (req, res) => {
     try {
         const { email } = req.params;
@@ -342,6 +342,143 @@ app.get('/saved-tuitions', async (req, res) => {
         });
     }
 });
+
+
+
+// Student related APIs : Apply for Tuition
+app.post("/applications", async (req, res) => {
+    try {
+        const { studentEmail, tuitionId } = req.body;
+
+        // 1. Check student email
+        if (!studentEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Student email is required.",
+            });
+        }
+
+        // 2. Find student from database
+        const user = await usersCollection.findOne({
+            email: studentEmail,
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found.",
+            });
+        }
+
+        // 3. Check Duplicate Application
+        const existingApplication = await applicationsCollection.findOne({
+            studentEmail,
+            tuitionId,
+        });
+
+        if (existingApplication) {
+            return res.status(409).json({
+                success: false,
+                message: "You have already applied for this tuition.",
+                alreadyApplied: true,
+            });
+        }
+
+        // 4. Check Free plan limit
+        if (user.isPro !== true) {
+            const totalApplications =
+                await applicationsCollection.countDocuments({
+                    studentEmail,
+                });
+
+            if (totalApplications >= 3) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "Free students can apply to a maximum of 3 tuitions. Upgrade to Pro for unlimited applications.",
+                    limitReached: true,
+                    currentApplications: totalApplications,
+                    maxApplications: 3,
+                });
+            }
+        }
+
+        // 5. Create new application
+        const newApplication = {
+            ...req.body,
+            status: "pending",
+            appliedAt: new Date(),
+        };
+
+        const result = await applicationsCollection.insertOne(
+            newApplication
+        );
+
+        return res.status(201).json({
+            success: true,
+            message: "Application submitted successfully.",
+            insertedId: result.insertedId,
+        });
+
+    } catch (error) {
+        console.error("Error submitting application:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to submit application.",
+        });
+    }
+});
+
+
+// Get Student Application Limit
+app.get("/applications/limit/:email", async (req, res) => {
+    try {
+        const { email } = req.params;
+
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                message: "Student email is required.",
+            });
+        }
+
+        const user = await usersCollection.findOne({
+            email,
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found.",
+            });
+        }
+
+        const totalApplications =
+            await applicationsCollection.countDocuments({
+                studentEmail: email,
+            });
+
+        const isPro = user.isPro === true;
+
+        return res.status(200).json({
+            success: true,
+            totalApplications,
+            maxApplications: isPro ? null : 3,
+            isPro,
+            isLimitReached: !isPro && totalApplications >= 3,
+        });
+
+    } catch (error) {
+        console.error("Error fetching application limit:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch application limit.",
+        });
+    }
+});
+
 
 app.get("/", (req, res) => {
   res.send("MentorLagbe server is running");
