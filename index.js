@@ -46,6 +46,82 @@ app.get('/users', async (req, res) => {
     res.send(result);
 })
 
+// Home APIs : Get All Approved Tuitions
+app.get("/tuitions", async (req, res) => {
+    try {
+        const allTuitions = await tuitionsCollection
+            .find({
+                approvalStatus: "approved",
+                isActive: true,
+            })
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        res.status(200).json(allTuitions);
+    } catch (error) {
+        console.error("Error fetching tuitions:", error);
+
+        res.status(500).json({
+            error: "Failed to fetch tuitions",
+        });
+    }
+});
+
+// Home APIs : Get Latest 6 Approved Tuitions
+app.get("/tuitions/latest", async (req, res) => {
+    try {
+        const latestTuitions = await tuitionsCollection
+            .find({
+                approvalStatus: "approved",
+                isActive: true,
+            })
+            .sort({ createdAt: -1 })
+            .limit(6)
+            .toArray();
+
+        res.status(200).json(latestTuitions);
+    } catch (error) {
+        console.error("Error fetching latest tuitions:", error);
+
+        res.status(500).json({
+            error: "Failed to fetch latest tuitions",
+        });
+    }
+});
+
+// Home APIs : Get Tuition Details by ID
+app.get("/tuitions/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                error: "Invalid tuition ID",
+            });
+        }
+
+        const tuition = await tuitionsCollection.findOne({
+            _id: new ObjectId(id),
+            approvalStatus: "approved",
+            isActive: true,
+        });
+
+        if (!tuition) {
+            return res.status(404).json({
+                error: "Tuition not found",
+            });
+        }
+
+        res.status(200).json(tuition);
+    } catch (error) {
+        console.error("Error fetching tuition details:", error);
+
+        res.status(500).json({
+            error: "Failed to fetch tuition details",
+        });
+    }
+});
+
 // Mentor related APIs : My Tuitions
 app.get('/my-tuitions', async (req, res) => {
     try{
