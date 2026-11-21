@@ -288,6 +288,98 @@ app.get("/tuitions/limit/:email", async (req, res) => {
     }
 });
 
+// Mentor: Update Applicant Status
+app.patch("/applications/:id/status", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, tutorEmail } = req.body;
+
+        // 1. Validate Application ID
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid application ID.",
+            });
+        }
+
+        // 2. Validate Status
+        const allowedStatuses = ["accepted", "rejected"];
+
+        if (!allowedStatuses.includes(status)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid application status.",
+            });
+        }
+
+        // 3. Validate Mentor Email
+        if (!tutorEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Mentor email is required.",
+            });
+        }
+
+        // 4. Find Application
+        const application = await applicationsCollection.findOne({
+            _id: new ObjectId(id),
+            tutorEmail,
+        });
+
+        if (!application) {
+            return res.status(404).json({
+                success: false,
+                message: "Application not found.",
+            });
+        }
+
+        // 5. Only Pending Applications Can Be Updated
+        if (application.status !== "pending") {
+            return res.status(409).json({
+                success: false,
+                message: "This application has already been responded to.",
+            });
+        }
+
+        // 6. Update Application Status
+        const result = await applicationsCollection.updateOne(
+            {
+                _id: new ObjectId(id),
+                tutorEmail,
+                status: "pending",
+            },
+            {
+                $set: {
+                    status,
+                    respondedAt: new Date(),
+                },
+            }
+        );
+
+        if (result.modifiedCount === 0) {
+            return res.status(409).json({
+                success: false,
+                message: "Application status could not be updated.",
+            });
+        }
+
+        // 7. Success Response
+        return res.status(200).json({
+            success: true,
+            message: `Application ${status} successfully.`,
+            applicationId: id,
+            status,
+        });
+    } catch (error) {
+        console.error("Update application status error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error.",
+        });
+    }
+});
+
 
 // Student related APIs : My Applications
 app.get('/my-applications', async (req, res) => {
@@ -342,7 +434,6 @@ app.get('/saved-tuitions', async (req, res) => {
         });
     }
 });
-
 
 
 // Student related APIs : Apply for Tuition
