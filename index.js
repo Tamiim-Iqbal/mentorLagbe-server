@@ -175,6 +175,7 @@ app.get('/applicants', async (req, res) => {
     }
 });
 
+
 // Mentor related APIs : Post Tuition
 app.post("/tuitions", async (req, res) => {
     try {
@@ -219,8 +220,16 @@ app.post("/tuitions", async (req, res) => {
         }
 
         // 4. Create new tuition
+        const {
+            approvalStatus,
+            isActive,
+            ...tuitionData
+        } = req.body;
+
         const newTuition = {
-            ...req.body,
+            ...tuitionData,
+            approvalStatus: "pending",
+            isActive: true,
             createdAt: new Date(),
         };
 
@@ -241,6 +250,7 @@ app.post("/tuitions", async (req, res) => {
         });
     }
 });
+
 
 // Get Mentor Tuition Posting Limit
 app.get("/tuitions/limit/:email", async (req, res) => {
