@@ -94,30 +94,56 @@ app.get("/tuitions/:id", async (req, res) => {
     try {
         const { id } = req.params;
 
+        // 1. Validate Tuition ID
         if (!ObjectId.isValid(id)) {
             return res.status(400).json({
-                error: "Invalid tuition ID",
+                success: false,
+                message: "Invalid tuition ID.",
             });
         }
 
+        // 2. Find Tuition by ID
         const tuition = await tuitionsCollection.findOne({
             _id: new ObjectId(id),
-            approvalStatus: "approved",
-            isActive: true,
         });
 
+        // 3. Tuition Not Found
         if (!tuition) {
             return res.status(404).json({
-                error: "Tuition not found",
+                success: false,
+                message: "Tuition not found.",
             });
         }
 
-        res.status(200).json(tuition);
+        // 4. Check Approval Status
+        if (tuition.approvalStatus !== "approved") {
+            return res.status(403).json({
+                success: false,
+                message: "This tuition is not approved yet.",
+            });
+        }
+
+        // 5. Check Active Status
+        if (tuition.isActive !== true) {
+            return res.status(403).json({
+                success: false,
+                message: "This tuition is currently inactive.",
+            });
+        }
+
+        // 6. Success Response
+        return res.status(200).json({
+            success: true,
+            message: "Tuition details fetched successfully.",
+            tuition,
+        });
+
     } catch (error) {
         console.error("Error fetching tuition details:", error);
 
-        res.status(500).json({
-            error: "Failed to fetch tuition details",
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch tuition details.",
         });
     }
 });
@@ -458,6 +484,63 @@ app.patch("/tuitions/:id/status", async (req, res) => {
     }
 });
 
+
+// Mentor related APIs : Delete Tuition
+app.delete("/tuitions/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { tutorEmail } = req.body;
+
+        // 1. Validate Tuition ID
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid tuition ID.",
+            });
+        }
+
+        // 2. Validate Mentor Email
+        if (!tutorEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Mentor email is required.",
+            });
+        }
+
+        // 3. Find and delete tuition owned by this mentor
+        const result = await tuitionsCollection.deleteOne({
+            _id: new ObjectId(id),
+            tutorEmail,
+        });
+
+        // 4. Tuition not found
+        if (result.deletedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Tuition not found or you are not authorized to delete it.",
+            });
+        }
+
+        // 5. Delete related applications
+        await applicationsCollection.deleteMany({
+            tuitionId: id,
+        });
+
+        // 6. Success Response
+        return res.status(200).json({
+            success: true,
+            message: "Tuition deleted successfully.",
+            deletedTuitionId: id,
+        });
+    } catch (error) {
+        console.error("Delete tuition error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to delete tuition.",
+        });
+    }
+});
 
 // Student related APIs : My Applications
 app.get('/my-applications', async (req, res) => {
