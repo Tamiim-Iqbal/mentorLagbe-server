@@ -1025,28 +1025,75 @@ app.get('/my-applications', async (req, res) => {
 });
 
 // Student related APIs : My Saved Tuitions
-app.get('/saved-tuitions', async (req, res) => {
+app.get("/saved-tuitions", async (req, res) => {
     try {
         const email = req.query.email;
 
-        if (!email) {
+        if (typeof email !== "string" || !email.trim()) {
             return res.status(400).json({
-                error: "Email is required"
+                success: false,
+                message: "Student email is required.",
             });
         }
 
-        const savedTuitions = await savedTuitionsCollection
-            .find({ studentEmail: email })
+        const studentEmail = email.trim().toLowerCase();
+
+        const savedRecords = await savedTuitionsCollection
+            .find({ studentEmail })
             .sort({ savedAt: -1 })
             .toArray();
 
-        res.status(200).json(savedTuitions);
-    }
-    catch (error) {
-        console.error("Error fetching saved tuitions:", error);
+        if (savedRecords.length === 0) {
+            return res.status(200).json({
+                success: true,
+                tuitions: [],
+            });
+        }
 
-        res.status(500).json({
-            error: "Failed to fetch saved tuitions",
+        const tuitionIds = savedRecords.map(
+            (item) => item.tuitionId
+        );
+
+        const tuitionDocuments = await tuitionsCollection
+            .find({
+                _id: { $in: tuitionIds },
+            })
+            .toArray();
+
+        // Preserve the user's saved order
+        const tuitionMap = new Map(
+            tuitionDocuments.map((tuition) => [
+                tuition._id.toString(),
+                tuition,
+            ])
+        );
+
+        const savedTuitions = savedRecords
+            .map((record) => {
+                const tuition = tuitionMap.get(
+                    record.tuitionId.toString()
+                );
+
+                if (!tuition) return null;
+
+                return {
+                    ...tuition,
+                    savedAt: record.savedAt,
+                };
+            })
+            .filter(Boolean);
+
+        return res.status(200).json({
+            success: true,
+            tuitions: savedTuitions,
+        });
+
+    } catch (error) {
+        console.error("Get saved tuitions error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to load saved tuitions.",
         });
     }
 });
@@ -1087,8 +1134,6 @@ app.get("/saved-tuitions/check", async (req, res) => {
         });
     }
 });
-
-
 
  // Save a tuition
 app.post("/saved-tuitions", async (req, res) => {
@@ -1187,7 +1232,6 @@ app.post("/saved-tuitions", async (req, res) => {
 });
 
 
-
 // Remove a saved tuition
 app.delete("/saved-tuitions", async (req, res) => {
     try {
@@ -1223,8 +1267,6 @@ app.delete("/saved-tuitions", async (req, res) => {
         });
     }
 });
-
-
 
 // Student related APIs : Apply for Tuition
 app.post("/applications", async (req, res) => {
