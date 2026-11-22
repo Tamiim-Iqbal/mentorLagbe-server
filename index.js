@@ -1052,6 +1052,180 @@ app.get('/saved-tuitions', async (req, res) => {
 });
 
 
+// Check whether a tuition is saved
+app.get("/saved-tuitions/check", async (req, res) => {
+    try {
+        const { studentEmail, tuitionId } = req.query;
+
+        if (
+            typeof studentEmail !== "string" ||
+            !studentEmail.trim() ||
+            typeof tuitionId !== "string" ||
+            !ObjectId.isValid(tuitionId)
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid student email and tuition ID are required.",
+            });
+        }
+
+        const savedTuition = await savedTuitionsCollection.findOne({
+            studentEmail: studentEmail.trim().toLowerCase(),
+            tuitionId: new ObjectId(tuitionId),
+        });
+
+        res.status(200).json({
+            success: true,
+            isSaved: Boolean(savedTuition),
+        });
+    } catch (error) {
+        console.error("Check saved tuition error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to check saved tuition.",
+        });
+    }
+});
+
+
+
+ // Save a tuition
+app.post("/saved-tuitions", async (req, res) => {
+    try {
+        const { studentEmail, tuitionId } = req.body;
+
+        // 1. Validate input
+        if (
+            typeof studentEmail !== "string" ||
+            !studentEmail.trim() ||
+            typeof tuitionId !== "string" ||
+            !ObjectId.isValid(tuitionId)
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid student email and tuition ID are required.",
+            });
+        }
+
+        const email = studentEmail.trim().toLowerCase();
+        const objectId = new ObjectId(tuitionId);
+
+        // 2. Find user from database
+        const user = await usersCollection.findOne({
+            email,
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found.",
+            });
+        }
+
+        // 3. Verify student role
+        if (user.userRole !== "student") {
+            return res.status(403).json({
+                success: false,
+                message: "Only students can save tuitions.",
+            });
+        }
+
+        // 4. Check whether tuition is already saved
+        const existingSavedTuition =
+            await savedTuitionsCollection.findOne({
+                studentEmail: email,
+                tuitionId: objectId,
+            });
+
+        if (existingSavedTuition) {
+            return res.status(200).json({
+                success: true,
+                message: "Tuition is already saved.",
+            });
+        }
+
+        // 5. Check Free plan limit
+        const isPro = user.isPro === true;
+
+        if (!isPro) {
+            const savedCount =
+                await savedTuitionsCollection.countDocuments({
+                    studentEmail: email,
+                });
+
+            if (savedCount >= 5) {
+                return res.status(403).json({
+                    success: false,
+                    code: "SAVE_LIMIT_REACHED",
+                    message:
+                        "Free plan allows you to save up to 5 tuitions. Upgrade to Pro for unlimited saves.",
+                });
+            }
+        }
+
+        // 6. Save tuition
+        await savedTuitionsCollection.insertOne({
+            studentEmail: email,
+            tuitionId: objectId,
+            savedAt: new Date(),
+        });
+
+        return res.status(201).json({
+            success: true,
+            message: "Tuition saved successfully.",
+        });
+
+    } catch (error) {
+        console.error("Save tuition error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to save tuition.",
+        });
+    }
+});
+
+
+
+// Remove a saved tuition
+app.delete("/saved-tuitions", async (req, res) => {
+    try {
+        const { studentEmail, tuitionId } = req.body;
+
+        if (
+            typeof studentEmail !== "string" ||
+            !studentEmail.trim() ||
+            typeof tuitionId !== "string" ||
+            !ObjectId.isValid(tuitionId)
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid student email and tuition ID are required.",
+            });
+        }
+
+        await savedTuitionsCollection.deleteOne({
+            studentEmail: studentEmail.trim().toLowerCase(),
+            tuitionId: new ObjectId(tuitionId),
+        });
+
+        res.status(200).json({
+            success: true,
+            message: "Tuition removed successfully.",
+        });
+    } catch (error) {
+        console.error("Remove saved tuition error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to remove saved tuition.",
+        });
+    }
+});
+
+
+
 // Student related APIs : Apply for Tuition
 app.post("/applications", async (req, res) => {
     try {
