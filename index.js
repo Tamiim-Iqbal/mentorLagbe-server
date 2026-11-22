@@ -1187,30 +1187,59 @@ app.get("/applications/limit/:email", async (req, res) => {
 });
 
 // Admin API: Get All Users
+
 app.get("/admin/users", async (req, res) => {
     try {
         const page = Math.max(1, Number(req.query.page) || 1);
+
         const limit = Math.min(
             50,
             Math.max(1, Number(req.query.limit) || 10)
         );
 
+        const search = req.query.search?.trim() || "";
+
         const skip = (page - 1) * limit;
 
-        const totalUsers = await usersCollection.countDocuments();
+        // Search Filter
+        const filter = search
+            ? {
+                  $or: [
+                      {
+                          name: {
+                              $regex: search.replace(
+                                  /[.*+?^${}()|[\]\\]/g,
+                                  "\\$&"
+                              ),
+                              $options: "i",
+                          },
+                      },
+                      {
+                          email: {
+                              $regex: search.replace(
+                                  /[.*+?^${}()|[\]\\]/g,
+                                  "\\$&"
+                              ),
+                              $options: "i",
+                          },
+                      },
+                  ],
+              }
+            : {};
 
+        // Total Users
+        const totalUsers = await usersCollection.countDocuments(filter);
+
+        // Fetch Users
         const users = await usersCollection
-            .find(
-                {},
-                {
-                    projection: {
-                        password: 0,
-                        token: 0,
-                        accessToken: 0,
-                        refreshToken: 0,
-                    },
-                }
-            )
+            .find(filter, {
+                projection: {
+                    password: 0,
+                    token: 0,
+                    accessToken: 0,
+                    refreshToken: 0,
+                },
+            })
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -1235,6 +1264,7 @@ app.get("/admin/users", async (req, res) => {
         });
     }
 });
+
 
 
 // Admin API: Update User Role
