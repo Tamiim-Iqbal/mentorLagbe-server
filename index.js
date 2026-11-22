@@ -55,8 +55,122 @@ app.get('/users', async (req, res) => {
     res.send(result);
 })
 
-// Payment Related APIs: Save Payment Transaction and Activate PRO Membership
+// Escape special regex characters
+const escapeRegex = (value) => {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
 
+// Get all transactions (Admin)
+app.get("/admin/transactions", async (req, res) => {
+    try {
+        const page = Math.max(1, Number(req.query.page) || 1);
+        const limit = Math.min(
+            50,
+            Math.max(1, Number(req.query.limit) || 10)
+        );
+
+        const search = String(req.query.search || "").trim();
+
+        const skip = (page - 1) * limit;
+
+        // Search filter
+        const filter = {};
+
+        if (search) {
+            const searchRegex = new RegExp(
+                escapeRegex(search),
+                "i"
+            );
+
+            filter.$or = [
+                { userEmail: searchRegex },
+                { sessionId: searchRegex },
+                { subscriptionId: searchRegex },
+                { role: searchRegex },
+                { paymentStatus: searchRegex },
+                { currency: searchRegex },
+            ];
+        }
+
+        // Get total count
+        const total = await transactionsCollection.countDocuments(
+            filter
+        );
+
+        // Get transactions with user information
+        const transactions = await transactionsCollection.aggregate([
+            {
+                $match: filter,
+            },
+            {
+                $sort: {
+                    createdAt: -1,
+                },
+            },
+            {
+                $skip: skip,
+            },
+            {
+                $limit: limit,
+            },
+            {
+                $lookup: {
+                    from: "user",
+                    localField: "userEmail",
+                    foreignField: "email",
+                    as: "user",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$user",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $project: {
+                    sessionId: 1,
+                    userId: 1,
+                    userEmail: 1,
+                    userName: {
+                        $ifNull: [
+                            "$user.name",
+                            "Unknown User",
+                        ],
+                    },
+                    role: 1,
+                    amount: 1,
+                    currency: 1,
+                    paymentStatus: 1,
+                    sessionStatus: 1,
+                    subscriptionId: 1,
+                    createdAt: 1,
+                },
+            },
+        ]).toArray();
+
+        return res.status(200).json({
+            success: true,
+            data: transactions,
+            pagination: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            },
+        });
+
+    } catch (error) {
+        console.error("Get transactions error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch transactions.",
+        });
+    }
+});
+
+// Payment Related APIs: Save Payment Transaction and Activate PRO Membership
 app.post("/payments", async (req, res) => {
     try {
         const { sessionId, email } = req.body;
