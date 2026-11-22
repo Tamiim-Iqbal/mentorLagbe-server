@@ -597,7 +597,6 @@ app.patch("/tuitions/:id", async (req, res) => {
 });
 
 
-
 // Mentor related APIs : Delete Tuition
 app.delete("/tuitions/:id", async (req, res) => {
     try {
@@ -843,6 +842,141 @@ app.get("/applications/limit/:email", async (req, res) => {
         });
     }
 });
+
+// Admin API: Get All Users
+app.get("/admin/users", async (req, res) => {
+    try {
+        const page = Math.max(1, Number(req.query.page) || 1);
+        const limit = Math.min(
+            50,
+            Math.max(1, Number(req.query.limit) || 10)
+        );
+
+        const skip = (page - 1) * limit;
+
+        const totalUsers = await usersCollection.countDocuments();
+
+        const users = await usersCollection
+            .find(
+                {},
+                {
+                    projection: {
+                        password: 0,
+                        token: 0,
+                        accessToken: 0,
+                        refreshToken: 0,
+                    },
+                }
+            )
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray();
+
+        res.status(200).json({
+            success: true,
+            data: users,
+            pagination: {
+                totalUsers,
+                currentPage: page,
+                totalPages: Math.ceil(totalUsers / limit),
+                limit,
+            },
+        });
+    } catch (error) {
+        console.error("Admin users error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch users.",
+        });
+    }
+});
+
+
+// Admin API: Update User Role
+app.patch("/admin/users/:id/role", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { userRole } = req.body;
+
+        // Validate User ID
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid user ID.",
+            });
+        }
+
+        // Validate Role
+        const allowedRoles = ["student", "mentor", "admin"];
+
+        if (!allowedRoles.includes(userRole)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid user role.",
+            });
+        }
+
+        // Check Existing User
+        const existingUser = await usersCollection.findOne({
+            _id: new ObjectId(id),
+        });
+
+        if (!existingUser) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found.",
+            });
+        }
+
+        const currentRole = existingUser.userRole || "student";
+
+        // Check Same Role
+        if (currentRole === userRole) {
+            return res.status(400).json({
+                success: false,
+                message: "User already has this role.",
+            });
+        }
+
+        // Update Role
+        const result = await usersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+                $set: {
+                    userRole,
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        if (result.modifiedCount === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Role was not changed.",
+            });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "User role updated successfully.",
+            data: {
+                userId: id,
+                previousRole: currentRole,
+                newRole: userRole,
+            },
+        });
+    } catch (error) {
+        console.error("Update user role error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to update user role.",
+        });
+    }
+});
+
 
 
 app.get("/", (req, res) => {
