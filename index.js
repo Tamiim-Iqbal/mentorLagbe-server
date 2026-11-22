@@ -54,7 +54,7 @@ app.get("/tuitions", async (req, res) => {
                 approvalStatus: "approved",
                 isActive: true,
             })
-            .sort({ createdAt: -1 })
+            .sort({ updatedAt: -1 })
             .toArray();
 
         res.status(200).json(allTuitions);
@@ -75,7 +75,7 @@ app.get("/tuitions/latest", async (req, res) => {
                 approvalStatus: "approved",
                 isActive: true,
             })
-            .sort({ createdAt: -1 })
+            .sort({ updatedAt: -1 })
             .limit(6)
             .toArray();
 
@@ -386,6 +386,74 @@ app.patch("/applications/:id/status", async (req, res) => {
         return res.status(500).json({
             success: false,
             message: "Internal server error.",
+        });
+    }
+});
+
+// Mentor related APIs: Update Tuition Active Status
+app.patch("/tuitions/:id/status", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { tutorEmail, isActive } = req.body;
+
+        // 1. Validate tuition ID
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid tuition ID.",
+            });
+        }
+
+        // 2. Validate mentor email
+        if (!tutorEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Mentor email is required.",
+            });
+        }
+
+        // 3. Validate active status
+        if (typeof isActive !== "boolean") {
+            return res.status(400).json({
+                success: false,
+                message: "A valid active status is required.",
+            });
+        }
+
+        // 4. Update only the mentor's own tuition
+        const result = await tuitionsCollection.updateOne(
+            {
+                _id: new ObjectId(id),
+                tutorEmail: tutorEmail,
+            },
+            {
+                $set: {
+                    isActive: isActive,
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        // 5. Check whether tuition exists and belongs to mentor
+        if (result.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Tuition not found.",
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Tuition ${isActive ? "activated" : "closed"} successfully.`,
+            tuitionId: id,
+            isActive: isActive,
+        });
+    } catch (error) {
+        console.error("Update tuition status error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to update tuition status.",
         });
     }
 });
