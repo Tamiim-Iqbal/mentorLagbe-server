@@ -977,6 +977,186 @@ app.patch("/admin/users/:id/role", async (req, res) => {
     }
 });
 
+// Admin API: Get All Tuitions
+app.get("/admin/tuitions", async (req, res) => {
+    try {
+        const page = Math.max(1, Number(req.query.page) || 1);
+
+        const limit = Math.min(
+            50,
+            Math.max(1, Number(req.query.limit) || 10)
+        );
+
+        const skip = (page - 1) * limit;
+
+        const { status, search } = req.query;
+
+        // Validate Approval Status
+        const allowedStatuses = [
+            "pending",
+            "approved",
+            "rejected",
+        ];
+
+        if (status && !allowedStatuses.includes(status)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid tuition approval status.",
+            });
+        }
+
+        // Build Query
+        const query = {};
+
+        if (status) {
+            query.approvalStatus = status;
+        }
+
+        // Search Filter
+        if (search && typeof search === "string" && search.trim()) {
+            const escapedSearch = search.trim().replace(
+                /[.*+?^${}()|[\]\\]/g,
+                "\\$&"
+            );
+
+            const searchRegex = new RegExp(escapedSearch, "i");
+
+            query.$or = [
+                { title: searchRegex },
+                { subject: searchRegex },
+                { tutorName: searchRegex },
+                { tutorEmail: searchRegex },
+            ];
+        }
+
+        // Get Total Tuitions
+        const totalTuitions =
+            await tuitionsCollection.countDocuments(query);
+
+        // Get Paginated Tuitions
+        const tuitions = await tuitionsCollection
+            .find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray();
+
+        // Response
+        res.status(200).json({
+            success: true,
+            tuitions,
+            pagination: {
+                totalTuitions,
+                currentPage: page,
+                totalPages: Math.ceil(totalTuitions / limit),
+                limit,
+            },
+        });
+    } catch (error) {
+        console.error("Admin get tuitions error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch tuitions.",
+        });
+    }
+});
+
+// Admin API: Update Tuition Approval
+app.patch("/admin/tuitions/:id/approval", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { approvalStatus } = req.body;
+
+        // Validate Tuition ID
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid tuition ID.",
+            });
+        }
+
+        // Validate Approval Status
+        const allowedStatuses = [
+            "pending",
+            "approved",
+            "rejected",
+        ];
+
+        if (!allowedStatuses.includes(approvalStatus)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid approval status.",
+            });
+        }
+
+        const tuitionId = new ObjectId(id);
+
+        // Find Existing Tuition
+        const existingTuition = await tuitionsCollection.findOne({
+            _id: tuitionId,
+        });
+
+        if (!existingTuition) {
+            return res.status(404).json({
+                success: false,
+                message: "Tuition not found.",
+            });
+        }
+
+        const previousStatus =
+            existingTuition.approvalStatus || "pending";
+
+        // Check Same Status
+        if (previousStatus === approvalStatus) {
+            return res.status(400).json({
+                success: false,
+                message: "Tuition already has this approval status.",
+            });
+        }
+
+        // Update Approval Status
+        const result = await tuitionsCollection.updateOne(
+            {
+                _id: tuitionId,
+                approvalStatus: existingTuition.approvalStatus,
+            },
+            {
+                $set: {
+                    approvalStatus,
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        // Check Update Result
+        if (result.modifiedCount === 0) {
+            return res.status(409).json({
+                success: false,
+                message: "Tuition status changed. Please refresh and try again.",
+            });
+        }
+
+        // Success Response
+        res.status(200).json({
+            success: true,
+            message: "Tuition approval updated successfully.",
+            data: {
+                tuitionId: id,
+                previousStatus,
+                newStatus: approvalStatus,
+            },
+        });
+    } catch (error) {
+        console.error("Admin update tuition approval error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to update tuition approval.",
+        });
+    }
+});
+
 
 
 app.get("/", (req, res) => {
