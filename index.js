@@ -485,6 +485,119 @@ app.patch("/tuitions/:id/status", async (req, res) => {
 });
 
 
+// Mentor related APIs : Update Tuition
+app.patch("/tuitions/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const {
+            tutorEmail,
+            title,
+            subject,
+            classLevel,
+            mode,
+            location,
+            monthlyFee,
+            daysPerWeek,
+            bannerImage,
+            description,
+        } = req.body;
+
+        // 1. Validate Tuition ID
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid tuition ID.",
+            });
+        }
+
+        // 2. Validate Tutor Email
+        if (!tutorEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Tutor email is required.",
+            });
+        }
+
+        // 3. Validate Required Fields
+        if (
+            !title?.trim() ||
+            title.trim().length > 120 ||
+            !subject ||
+            !classLevel ||
+            !["Online", "Offline"].includes(mode) ||
+            !Number.isFinite(Number(monthlyFee)) ||
+            Number(monthlyFee) <= 0 ||
+            !Number.isInteger(Number(daysPerWeek)) ||
+            Number(daysPerWeek) < 1 ||
+            Number(daysPerWeek) > 7 ||
+            !description?.trim() ||
+            description.trim().length < 10 ||
+            (mode === "Offline" && !location?.trim())
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Please provide valid tuition details.",
+            });
+        }
+
+        // 4. Find Tuition Owned by Tutor
+        const tuition = await tuitionsCollection.findOne({
+            _id: new ObjectId(id),
+            tutorEmail,
+        });
+
+        if (!tuition) {
+            return res.status(404).json({
+                success: false,
+                message: "Tuition not found or you are not authorized to update it.",
+            });
+        }
+
+        // 5. Update Editable Fields Only
+        const updatedData = {
+            title: title.trim(),
+            subject,
+            classLevel,
+            mode,
+            location: mode === "Online" ? "Online" : location.trim(),
+            monthlyFee: Number(monthlyFee),
+            daysPerWeek: Number(daysPerWeek),
+            bannerImage: bannerImage || "",
+            description: description.trim(),
+            updatedAt: new Date(),
+        };
+
+        // 6. Update Tuition
+        const result = await tuitionsCollection.updateOne(
+            {
+                _id: new ObjectId(id),
+                tutorEmail,
+            },
+            {
+                $set: updatedData,
+            }
+        );
+
+        return res.status(200).json({
+            success: true,
+            message:
+                result.modifiedCount > 0
+                    ? "Tuition updated successfully."
+                    : "No changes were made.",
+        });
+    } catch (error) {
+        console.error("Error updating tuition:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to update tuition.",
+        });
+    }
+});
+
+
+
 // Mentor related APIs : Delete Tuition
 app.delete("/tuitions/:id", async (req, res) => {
     try {
