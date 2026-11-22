@@ -2,9 +2,11 @@ import express from "express";
 import cors from "cors";
 import "dotenv/config";
 import { MongoClient, ObjectId } from "mongodb";
+import Stripe from "stripe";
 
 const app = express();
 const PORT = process.env.PORT || 8000;
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // Middleware
 app.use(express.json());
@@ -38,6 +40,13 @@ const usersCollection = database.collection("user");
 const tuitionsCollection = database.collection("tuitions");
 const applicationsCollection = database.collection("applications");
 const savedTuitionsCollection = database.collection("savedTuitions");
+const transactionsCollection = database.collection("transactions");
+
+// Prevent duplicate Stripe Checkout Sessions
+await transactionsCollection.createIndex(
+    { sessionId: 1 },
+    { unique: true }
+);
 
 // Get users 
 app.get('/users', async (req, res) => {
@@ -45,6 +54,226 @@ app.get('/users', async (req, res) => {
     const result = await cursor.toArray();
     res.send(result);
 })
+
+// Payment Related APIs: Save Payment Transaction and Activate PRO Membership
+
+app.post("/payments", async (req, res) => {
+    try {
+        const { sessionId, email } = req.body;
+
+        // 1. Validate request
+        if (
+            typeof sessionId !== "string" ||
+            typeof email !== "string" ||
+            !sessionId.trim() ||
+            !email.trim()
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Session ID and email are required.",
+            });
+        }
+
+        const userEmail = email.toLowerCase().trim();
+
+        // 2. Retrieve Stripe Checkout Session
+        const session =
+            await stripe.checkout.sessions.retrieve(sessionId);
+
+        const {
+            id,
+            status,
+            payment_status,
+            customer_email,
+            customer_details,
+            metadata,
+            payment_intent,
+            subscription,
+            customer,
+            amount_total,
+            currency,
+            mode,
+        } = session;
+
+        // 3. Verify payment
+        if (
+            status !== "complete" ||
+            payment_status !== "paid" ||
+            mode !== "subscription"
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Payment has not been completed.",
+            });
+        }
+
+        // 4. Get userId from Stripe metadata
+        const userId = metadata?.userId;
+
+        if (!userId) {
+            console.error(
+                "Missing userId in Stripe metadata:",
+                metadata
+            );
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    "User ID is missing from Stripe session metadata. Please create a new checkout session.",
+            });
+        }
+
+        // 5. Verify email ownership
+        const sessionEmail = (
+            metadata?.email ||
+            customer_details?.email ||
+            customer_email ||
+            ""
+        ).toLowerCase().trim();
+
+        if (!sessionEmail || sessionEmail !== userEmail) {
+            return res.status(403).json({
+                success: false,
+                message: "Payment session does not belong to this user.",
+            });
+        }
+
+        // 6. Verify role
+        const role = metadata?.role;
+
+        if (role !== "student" && role !== "mentor") {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid subscription role.",
+            });
+        }
+
+        // 7. Find user
+        const user = await usersCollection.findOne({
+            email: userEmail,
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found.",
+            });
+        }
+
+        // 8. Verify user's role
+        if (user.userRole !== role) {
+            return res.status(403).json({
+                success: false,
+                message:
+                    "Subscription role does not match your account.",
+            });
+        }
+
+        // 9. Verify Better Auth user ID if available
+        if (user.id && user.id !== userId) {
+            return res.status(403).json({
+                success: false,
+                message: "User ID does not match your account.",
+            });
+        }
+
+        // 10. Prepare transaction data
+        const transaction = {
+            sessionId: id,
+            userEmail,
+            role,
+
+            amount: amount_total,
+            currency,
+
+            paymentStatus: payment_status,
+            sessionStatus: status,
+
+            paymentIntent:
+                typeof payment_intent === "string"
+                    ? payment_intent
+                    : payment_intent?.id || null,
+
+            subscriptionId:
+                typeof subscription === "string"
+                    ? subscription
+                    : subscription?.id || null,
+
+            customerId:
+                typeof customer === "string"
+                    ? customer
+                    : customer?.id || null,
+
+            createdAt: new Date(),
+        };
+
+        // 11. Save transaction and ensure userId is updated
+        const result = await transactionsCollection.updateOne(
+            { sessionId: id },
+            {
+                $set: {
+                    userId,
+                },
+                $setOnInsert: transaction,
+            },
+            { upsert: true }
+        );
+
+        // 12. Activate PRO membership
+        const updateResult = await usersCollection.updateOne(
+            { email: userEmail },
+            {
+                $set: {
+                    isPro: true,
+                    stripeCustomerId: transaction.customerId,
+                    stripeSubscriptionId: transaction.subscriptionId,
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        if (updateResult.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Unable to update user membership.",
+            });
+        }
+
+        // 13. Get saved transaction
+        const savedTransaction =
+            await transactionsCollection.findOne({
+                sessionId: id,
+            });
+
+        // 14. Success response
+        return res.status(200).json({
+            success: true,
+            message:
+                "Payment verified successfully. PRO membership activated.",
+            transactionId: savedTransaction?._id,
+            userId: savedTransaction?.userId,
+            membership:
+                role === "student" ? "PRO Student" : "PRO Mentor",
+            alreadyProcessed: result.upsertedCount === 0,
+        });
+
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(409).json({
+                success: false,
+                message: "This payment has already been processed.",
+            });
+        }
+
+        console.error("Payment verification error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to verify payment.",
+        });
+    }
+});
+
 
 // Home APIs : Get All Approved Tuitions
 app.get("/tuitions", async (req, res) => {
