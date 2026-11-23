@@ -3,6 +3,7 @@ import cors from "cors";
 import "dotenv/config";
 import { MongoClient, ObjectId } from "mongodb";
 import Stripe from "stripe";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const app = express();
 const PORT = process.env.PORT || 8000;
@@ -19,6 +20,49 @@ app.use(
     credentials: true,
   })
 );
+
+// JWKS Configuration (Outside Middleware)
+const JWKS = createRemoteJWKSet(
+    new URL(`${process.env.AUTH_URL}/api/auth/jwks`)
+);
+
+// Verify Token Middleware
+const verifyToken = async (req, res, next) => {
+    const authHeader = req.headers.authorization;
+
+    // Check Authorization Header
+    if (!authHeader?.startsWith("Bearer ")) {
+        return res.status(401).json({
+            success: false,
+            message: "Unauthorized access. Please log in.",
+        });
+    }
+
+    const token = authHeader.split(" ")[1];
+
+    if (!token) {
+        return res.status(401).json({
+            success: false,
+            message: "Unauthorized access. Please log in.",
+        });
+    }
+
+    try {
+        const { payload } = await jwtVerify(token, JWKS);
+
+        // Attach verified user information
+        req.user = payload;
+
+        next();
+    } catch (error) {
+        console.error("Token verification error:", error.message);
+
+        return res.status(401).json({
+            success: false,
+            message: "Unauthorized access. Invalid or expired token.",
+        });
+    }
+};
 
 // MongoDB Connection
 const client = new MongoClient(process.env.MONGODB_URI);
@@ -48,8 +92,42 @@ await transactionsCollection.createIndex(
     { unique: true }
 );
 
+// Verify Admin Middleware
+const verifyAdmin = async (req, res, next) => {
+    try {
+        const email = req.user?.email?.toLowerCase().trim();
+
+        if (!email) {
+            return res.status(403).json({
+                success: false,
+                message: "Admin access denied.",
+            });
+        }
+
+        const user = await usersCollection.findOne({
+            email,
+        });
+
+        if (!user || user.userRole !== "admin") {
+            return res.status(403).json({
+                success: false,
+                message: "Admin access denied.",
+            });
+        }
+
+        next();
+    } catch (error) {
+        console.error("Admin verification error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to verify admin access.",
+        });
+    }
+};
+
 // Get users 
-app.get('/users', async (req, res) => {
+app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
     const cursor = usersCollection.find({});
     const result = await cursor.toArray();
     res.send(result);
@@ -61,7 +139,7 @@ const escapeRegex = (value) => {
 };
 
 // Get all transactions (Admin)
-app.get("/admin/transactions", async (req, res) => {
+app.get("/admin/transactions", verifyToken, verifyAdmin, async (req, res) => {
     try {
         const page = Math.max(1, Number(req.query.page) || 1);
         const limit = Math.min(
@@ -171,24 +249,21 @@ app.get("/admin/transactions", async (req, res) => {
 });
 
 // Payment Related APIs: Save Payment Transaction and Activate PRO Membership
-app.post("/payments", async (req, res) => {
+app.post("/payments", verifyToken, async (req, res) => {
     try {
-        const { sessionId, email } = req.body;
+        const { sessionId } = req.body;
+        const userEmail = req.user.email.toLowerCase().trim();
 
         // 1. Validate request
         if (
             typeof sessionId !== "string" ||
-            typeof email !== "string" ||
-            !sessionId.trim() ||
-            !email.trim()
+            !sessionId.trim()
         ) {
             return res.status(400).json({
                 success: false,
-                message: "Session ID and email are required.",
+                message: "Session ID is required.",
             });
         }
-
-        const userEmail = email.toLowerCase().trim();
 
         // 2. Retrieve Stripe Checkout Session
         const session =
@@ -432,6 +507,51 @@ app.get("/tuitions/latest", async (req, res) => {
     }
 });
 
+// Get Mentor Tuition Posting Limit
+app.get("/tuitions/limit", verifyToken, async (req, res) => {
+    try {
+        const email = req.user?.email?.toLowerCase().trim();
+
+        if (!email) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid authentication token. Email not found.",
+            });
+        }
+
+        const user = await usersCollection.findOne({ email });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found.",
+            });
+        }
+
+        const totalPosts = await tuitionsCollection.countDocuments({
+            tutorEmail: email,
+        });
+
+        const isPro = user.isPro === true;
+
+        return res.status(200).json({
+            success: true,
+            totalPosts,
+            maxPosts: isPro ? null : 2,
+            isPro,
+            isLimitReached: !isPro && totalPosts >= 2,
+        });
+    } catch (error) {
+        console.error("Error fetching tuition limit:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch tuition limit.",
+        });
+    }
+});
+
+
 // Home APIs : Get Tuition Details by ID
 app.get("/tuitions/:id", async (req, res) => {
     try {
@@ -492,41 +612,30 @@ app.get("/tuitions/:id", async (req, res) => {
 });
 
 // Mentor related APIs : My Tuitions
-app.get('/my-tuitions', async (req, res) => {
-    try{
-        const email = req.query.email;
+app.get('/my-tuitions', verifyToken, async (req, res) => {
+    try {
+        const email = req.user.email.toLowerCase().trim();
 
-        if (!email) {
-            return res.status(400).json({
-                error: "Email is required"
-            })
-        }
         const myTuitions = await tuitionsCollection
-        .find({ tutorEmail: email })
-        .sort({ createdAt: -1 })
-        .toArray();
+            .find({ tutorEmail: email })
+            .sort({ createdAt: -1 })
+            .toArray();
 
         res.status(200).json(myTuitions);
     }
-    catch (error){
+    catch (error) {
         console.error("Error fetching my tuitions:", error);
+
         res.status(500).json({
             error: "Failed to fetch my tuitions",
         });
     }
-
 });
 
 // Mentor related APIs : My Applicants
-app.get('/applicants', async (req, res) => {
+app.get('/applicants', verifyToken, async (req, res) => {
     try {
-        const email = req.query.email;
-
-        if (!email) {
-            return res.status(400).json({
-                error: "Email is required"
-            });
-        }
+        const email = req.user.email.toLowerCase().trim();
 
         const myApplicants = await applicationsCollection
             .find({ tutorEmail: email })
@@ -544,21 +653,12 @@ app.get('/applicants', async (req, res) => {
     }
 });
 
-
 // Mentor related APIs : Post Tuition
-app.post("/tuitions", async (req, res) => {
+app.post("/tuitions", verifyToken, async (req, res) => {
     try {
-        const { tutorEmail } = req.body;
+        const tutorEmail = req.user.email.toLowerCase().trim();
 
-        // 1. Check tutor email
-        if (!tutorEmail) {
-            return res.status(400).json({
-                success: false,
-                message: "Tutor email is required.",
-            });
-        }
-
-        // 2. Find user from database
+        // 1. Find user from database
         const user = await usersCollection.findOne({
             email: tutorEmail,
         });
@@ -570,7 +670,7 @@ app.post("/tuitions", async (req, res) => {
             });
         }
 
-        // 3. Check Free plan limit
+        // 2. Check Free plan limit
         if (user.isPro !== true) {
             const totalPosts = await tuitionsCollection.countDocuments({
                 tutorEmail,
@@ -588,15 +688,17 @@ app.post("/tuitions", async (req, res) => {
             }
         }
 
-        // 4. Create new tuition
+        // 3. Create new tuition
         const {
             approvalStatus,
             isActive,
+            tutorEmail: ignoredTutorEmail,
             ...tuitionData
         } = req.body;
 
         const newTuition = {
             ...tuitionData,
+            tutorEmail,
             approvalStatus: "pending",
             isActive: true,
             createdAt: new Date(),
@@ -620,58 +722,12 @@ app.post("/tuitions", async (req, res) => {
     }
 });
 
-
-// Get Mentor Tuition Posting Limit
-app.get("/tuitions/limit/:email", async (req, res) => {
-    try {
-        const { email } = req.params;
-
-        if (!email) {
-            return res.status(400).json({
-                success: false,
-                message: "Tutor email is required.",
-            });
-        }
-
-        const user = await usersCollection.findOne({
-            email,
-        });
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: "User not found.",
-            });
-        }
-
-        const totalPosts = await tuitionsCollection.countDocuments({
-            tutorEmail: email,
-        });
-
-        const isPro = user.isPro === true;
-
-        return res.status(200).json({
-            success: true,
-            totalPosts,
-            maxPosts: isPro ? null : 2,
-            isPro,
-            isLimitReached: !isPro && totalPosts >= 2,
-        });
-    } catch (error) {
-        console.error("Error fetching tuition limit:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: "Failed to fetch tuition limit.",
-        });
-    }
-});
-
 // Mentor: Update Applicant Status
-app.patch("/applications/:id/status", async (req, res) => {
+app.patch("/applications/:id/status", verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, tutorEmail } = req.body;
+        const { status } = req.body;
+        const tutorEmail = req.user.email.toLowerCase().trim();
 
         // 1. Validate Application ID
         if (!ObjectId.isValid(id)) {
@@ -691,15 +747,7 @@ app.patch("/applications/:id/status", async (req, res) => {
             });
         }
 
-        // 3. Validate Mentor Email
-        if (!tutorEmail) {
-            return res.status(400).json({
-                success: false,
-                message: "Mentor email is required.",
-            });
-        }
-
-        // 4. Find Application
+        // 3. Find Application
         const application = await applicationsCollection.findOne({
             _id: new ObjectId(id),
             tutorEmail,
@@ -712,7 +760,7 @@ app.patch("/applications/:id/status", async (req, res) => {
             });
         }
 
-        // 5. Only Pending Applications Can Be Updated
+        // 4. Only Pending Applications Can Be Updated
         if (application.status !== "pending") {
             return res.status(409).json({
                 success: false,
@@ -720,7 +768,7 @@ app.patch("/applications/:id/status", async (req, res) => {
             });
         }
 
-        // 6. Update Application Status
+        // 5. Update Application Status
         const result = await applicationsCollection.updateOne(
             {
                 _id: new ObjectId(id),
@@ -742,7 +790,7 @@ app.patch("/applications/:id/status", async (req, res) => {
             });
         }
 
-        // 7. Success Response
+        // 6. Success Response
         return res.status(200).json({
             success: true,
             message: `Application ${status} successfully.`,
@@ -760,10 +808,11 @@ app.patch("/applications/:id/status", async (req, res) => {
 });
 
 // Mentor related APIs: Update Tuition Active Status
-app.patch("/tuitions/:id/status", async (req, res) => {
+app.patch("/tuitions/:id/status", verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
-        const { tutorEmail, isActive } = req.body;
+        const { isActive } = req.body;
+        const tutorEmail = req.user.email.toLowerCase().trim();
 
         // 1. Validate tuition ID
         if (!ObjectId.isValid(id)) {
@@ -773,15 +822,7 @@ app.patch("/tuitions/:id/status", async (req, res) => {
             });
         }
 
-        // 2. Validate mentor email
-        if (!tutorEmail) {
-            return res.status(400).json({
-                success: false,
-                message: "Mentor email is required.",
-            });
-        }
-
-        // 3. Validate active status
+        // 2. Validate active status
         if (typeof isActive !== "boolean") {
             return res.status(400).json({
                 success: false,
@@ -789,21 +830,21 @@ app.patch("/tuitions/:id/status", async (req, res) => {
             });
         }
 
-        // 4. Update only the mentor's own tuition
+        // 3. Update only the mentor's own tuition
         const result = await tuitionsCollection.updateOne(
             {
                 _id: new ObjectId(id),
-                tutorEmail: tutorEmail,
+                tutorEmail,
             },
             {
                 $set: {
-                    isActive: isActive,
+                    isActive,
                     updatedAt: new Date(),
                 },
             }
         );
 
-        // 5. Check whether tuition exists and belongs to mentor
+        // 4. Check whether tuition exists and belongs to mentor
         if (result.matchedCount === 0) {
             return res.status(404).json({
                 success: false,
@@ -815,7 +856,7 @@ app.patch("/tuitions/:id/status", async (req, res) => {
             success: true,
             message: `Tuition ${isActive ? "activated" : "closed"} successfully.`,
             tuitionId: id,
-            isActive: isActive,
+            isActive,
         });
     } catch (error) {
         console.error("Update tuition status error:", error);
@@ -827,14 +868,13 @@ app.patch("/tuitions/:id/status", async (req, res) => {
     }
 });
 
-
 // Mentor related APIs : Update Tuition
-app.patch("/tuitions/:id", async (req, res) => {
+app.patch("/tuitions/:id", verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
+        const tutorEmail = req.user.email.toLowerCase().trim();
 
         const {
-            tutorEmail,
             title,
             subject,
             classLevel,
@@ -854,15 +894,7 @@ app.patch("/tuitions/:id", async (req, res) => {
             });
         }
 
-        // 2. Validate Tutor Email
-        if (!tutorEmail) {
-            return res.status(400).json({
-                success: false,
-                message: "Tutor email is required.",
-            });
-        }
-
-        // 3. Validate Required Fields
+        // 2. Validate Required Fields
         if (
             !title?.trim() ||
             title.trim().length > 120 ||
@@ -884,7 +916,7 @@ app.patch("/tuitions/:id", async (req, res) => {
             });
         }
 
-        // 4. Find Tuition Owned by Tutor
+        // 3. Find Tuition Owned by Tutor
         const tuition = await tuitionsCollection.findOne({
             _id: new ObjectId(id),
             tutorEmail,
@@ -897,7 +929,7 @@ app.patch("/tuitions/:id", async (req, res) => {
             });
         }
 
-        // 5. Update Editable Fields Only
+        // 4. Update Editable Fields Only
         const updatedData = {
             title: title.trim(),
             subject,
@@ -911,7 +943,7 @@ app.patch("/tuitions/:id", async (req, res) => {
             updatedAt: new Date(),
         };
 
-        // 6. Update Tuition
+        // 5. Update Tuition
         const result = await tuitionsCollection.updateOne(
             {
                 _id: new ObjectId(id),
@@ -939,12 +971,11 @@ app.patch("/tuitions/:id", async (req, res) => {
     }
 });
 
-
 // Mentor related APIs : Delete Tuition
-app.delete("/tuitions/:id", async (req, res) => {
+app.delete("/tuitions/:id", verifyToken, async (req, res) => {
     try {
         const { id } = req.params;
-        const { tutorEmail } = req.body;
+        const tutorEmail = req.user.email.toLowerCase().trim();
 
         // 1. Validate Tuition ID
         if (!ObjectId.isValid(id)) {
@@ -954,21 +985,13 @@ app.delete("/tuitions/:id", async (req, res) => {
             });
         }
 
-        // 2. Validate Mentor Email
-        if (!tutorEmail) {
-            return res.status(400).json({
-                success: false,
-                message: "Mentor email is required.",
-            });
-        }
-
-        // 3. Find and delete tuition owned by this mentor
+        // 2. Find and delete tuition owned by this mentor
         const result = await tuitionsCollection.deleteOne({
             _id: new ObjectId(id),
             tutorEmail,
         });
 
-        // 4. Tuition not found
+        // 3. Tuition not found
         if (result.deletedCount === 0) {
             return res.status(404).json({
                 success: false,
@@ -976,12 +999,12 @@ app.delete("/tuitions/:id", async (req, res) => {
             });
         }
 
-        // 5. Delete related applications
+        // 4. Delete related applications
         await applicationsCollection.deleteMany({
             tuitionId: id,
         });
 
-        // 6. Success Response
+        // 5. Success Response
         return res.status(200).json({
             success: true,
             message: "Tuition deleted successfully.",
@@ -998,15 +1021,9 @@ app.delete("/tuitions/:id", async (req, res) => {
 });
 
 // Student related APIs : My Applications
-app.get('/my-applications', async (req, res) => {
+app.get('/my-applications', verifyToken, async (req, res) => {
     try {
-        const email = req.query.email;
-
-        if (!email) {
-            return res.status(400).json({
-                error: "Email is required"
-            });
-        }
+        const email = req.user.email.toLowerCase().trim();
 
         const myApplications = await applicationsCollection
             .find({ studentEmail: email })
@@ -1025,18 +1042,9 @@ app.get('/my-applications', async (req, res) => {
 });
 
 // Student related APIs : My Saved Tuitions
-app.get("/saved-tuitions", async (req, res) => {
+app.get("/saved-tuitions", verifyToken, async (req, res) => {
     try {
-        const email = req.query.email;
-
-        if (typeof email !== "string" || !email.trim()) {
-            return res.status(400).json({
-                success: false,
-                message: "Student email is required.",
-            });
-        }
-
-        const studentEmail = email.trim().toLowerCase();
+        const studentEmail = req.user.email.toLowerCase().trim();
 
         const savedRecords = await savedTuitionsCollection
             .find({ studentEmail })
@@ -1098,29 +1106,30 @@ app.get("/saved-tuitions", async (req, res) => {
     }
 });
 
-
 // Check whether a tuition is saved
-app.get("/saved-tuitions/check", async (req, res) => {
+app.get("/saved-tuitions/check", verifyToken, async (req, res) => {
     try {
-        const { studentEmail, tuitionId } = req.query;
+        const { tuitionId } = req.query;
+        const studentEmail = req.user.email.toLowerCase().trim();
 
+        // 1. Validate Tuition ID
         if (
-            typeof studentEmail !== "string" ||
-            !studentEmail.trim() ||
             typeof tuitionId !== "string" ||
             !ObjectId.isValid(tuitionId)
         ) {
             return res.status(400).json({
                 success: false,
-                message: "Valid student email and tuition ID are required.",
+                message: "Valid tuition ID is required.",
             });
         }
 
+        // 2. Check Saved Tuition
         const savedTuition = await savedTuitionsCollection.findOne({
-            studentEmail: studentEmail.trim().toLowerCase(),
+            studentEmail,
             tuitionId: new ObjectId(tuitionId),
         });
 
+        // 3. Success Response
         res.status(200).json({
             success: true,
             isSaved: Boolean(savedTuition),
@@ -1135,25 +1144,23 @@ app.get("/saved-tuitions/check", async (req, res) => {
     }
 });
 
- // Save a tuition
-app.post("/saved-tuitions", async (req, res) => {
+// Save a tuition
+app.post("/saved-tuitions", verifyToken, async (req, res) => {
     try {
-        const { studentEmail, tuitionId } = req.body;
+        const { tuitionId } = req.body;
+        const email = req.user.email.toLowerCase().trim();
 
-        // 1. Validate input
+        // 1. Validate Tuition ID
         if (
-            typeof studentEmail !== "string" ||
-            !studentEmail.trim() ||
             typeof tuitionId !== "string" ||
             !ObjectId.isValid(tuitionId)
         ) {
             return res.status(400).json({
                 success: false,
-                message: "Valid student email and tuition ID are required.",
+                message: "Valid tuition ID is required.",
             });
         }
 
-        const email = studentEmail.trim().toLowerCase();
         const objectId = new ObjectId(tuitionId);
 
         // 2. Find user from database
@@ -1233,27 +1240,29 @@ app.post("/saved-tuitions", async (req, res) => {
 
 
 // Remove a saved tuition
-app.delete("/saved-tuitions", async (req, res) => {
+app.delete("/saved-tuitions", verifyToken, async (req, res) => {
     try {
-        const { studentEmail, tuitionId } = req.body;
+        const { tuitionId } = req.body;
+        const studentEmail = req.user.email.toLowerCase().trim();
 
+        // 1. Validate Tuition ID
         if (
-            typeof studentEmail !== "string" ||
-            !studentEmail.trim() ||
             typeof tuitionId !== "string" ||
             !ObjectId.isValid(tuitionId)
         ) {
             return res.status(400).json({
                 success: false,
-                message: "Valid student email and tuition ID are required.",
+                message: "Valid tuition ID is required.",
             });
         }
 
+        // 2. Remove Saved Tuition
         await savedTuitionsCollection.deleteOne({
-            studentEmail: studentEmail.trim().toLowerCase(),
+            studentEmail,
             tuitionId: new ObjectId(tuitionId),
         });
 
+        // 3. Success Response
         res.status(200).json({
             success: true,
             message: "Tuition removed successfully.",
@@ -1269,19 +1278,12 @@ app.delete("/saved-tuitions", async (req, res) => {
 });
 
 // Student related APIs : Apply for Tuition
-app.post("/applications", async (req, res) => {
+app.post("/applications", verifyToken, async (req, res) => {
     try {
-        const { studentEmail, tuitionId } = req.body;
+        const { tuitionId } = req.body;
+        const studentEmail = req.user.email.toLowerCase().trim();
 
-        // 1. Check student email
-        if (!studentEmail) {
-            return res.status(400).json({
-                success: false,
-                message: "Student email is required.",
-            });
-        }
-
-        // 2. Find student from database
+        // 1. Find student from database
         const user = await usersCollection.findOne({
             email: studentEmail,
         });
@@ -1293,7 +1295,7 @@ app.post("/applications", async (req, res) => {
             });
         }
 
-        // 3. Check Duplicate Application
+        // 2. Check Duplicate Application
         const existingApplication = await applicationsCollection.findOne({
             studentEmail,
             tuitionId,
@@ -1307,7 +1309,7 @@ app.post("/applications", async (req, res) => {
             });
         }
 
-        // 4. Check Free plan limit
+        // 3. Check Free plan limit
         if (user.isPro !== true) {
             const totalApplications =
                 await applicationsCollection.countDocuments({
@@ -1326,9 +1328,10 @@ app.post("/applications", async (req, res) => {
             }
         }
 
-        // 5. Create new application
+        // 4. Create new application
         const newApplication = {
             ...req.body,
+            studentEmail,
             status: "pending",
             appliedAt: new Date(),
         };
@@ -1353,19 +1356,12 @@ app.post("/applications", async (req, res) => {
     }
 });
 
-
 // Get Student Application Limit
-app.get("/applications/limit/:email", async (req, res) => {
+app.get("/applications/limit", verifyToken, async (req, res) => {
     try {
-        const { email } = req.params;
+        const email = req.user.email.toLowerCase().trim();
 
-        if (!email) {
-            return res.status(400).json({
-                success: false,
-                message: "Student email is required.",
-            });
-        }
-
+        // 1. Find student from database
         const user = await usersCollection.findOne({
             email,
         });
@@ -1377,13 +1373,16 @@ app.get("/applications/limit/:email", async (req, res) => {
             });
         }
 
+        // 2. Count total applications
         const totalApplications =
             await applicationsCollection.countDocuments({
                 studentEmail: email,
             });
 
+        // 3. Check Pro membership
         const isPro = user.isPro === true;
 
+        // 4. Success Response
         return res.status(200).json({
             success: true,
             totalApplications,
@@ -1403,8 +1402,7 @@ app.get("/applications/limit/:email", async (req, res) => {
 });
 
 // Admin API: Get All Users
-
-app.get("/admin/users", async (req, res) => {
+app.get("/admin/users", verifyToken, verifyAdmin, async (req, res) => {
     try {
         const page = Math.max(1, Number(req.query.page) || 1);
 
@@ -1481,10 +1479,8 @@ app.get("/admin/users", async (req, res) => {
     }
 });
 
-
-
 // Admin API: Update User Role
-app.patch("/admin/users/:id/role", async (req, res) => {
+app.patch("/admin/users/:id/role", verifyToken, verifyAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         const { userRole } = req.body;
@@ -1567,7 +1563,7 @@ app.patch("/admin/users/:id/role", async (req, res) => {
 });
 
 // Admin API: Get All Tuitions
-app.get("/admin/tuitions", async (req, res) => {
+app.get("/admin/tuitions", verifyToken, verifyAdmin, async (req, res) => {
     try {
         const page = Math.max(1, Number(req.query.page) || 1);
 
@@ -1652,7 +1648,7 @@ app.get("/admin/tuitions", async (req, res) => {
 });
 
 // Admin API: Update Tuition Approval
-app.patch("/admin/tuitions/:id/approval", async (req, res) => {
+app.patch("/admin/tuitions/:id/approval", verifyToken, verifyAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         const { approvalStatus } = req.body;
@@ -1745,8 +1741,6 @@ app.patch("/admin/tuitions/:id/approval", async (req, res) => {
         });
     }
 });
-
-
 
 app.get("/", (req, res) => {
   res.send("MentorLagbe server is running");
