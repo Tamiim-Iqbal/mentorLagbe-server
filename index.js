@@ -463,15 +463,32 @@ app.post("/payments", verifyToken, async (req, res) => {
     }
 });
 
-
-// Home APIs : Get All Approved Tuitions
+// Tuition APIs : Get All Approved and Active Tuitions
 app.get("/tuitions", async (req, res) => {
     try {
+        const { search } = req.query;
+
+        const query = {
+            approvalStatus: "approved",
+            isActive: true,
+        };
+
+        // Search by title or subject
+        if (typeof search === "string" && search.trim()) {
+            const escapedSearch = search
+                .trim()
+                .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+            const searchRegex = new RegExp(escapedSearch, "i");
+
+            query.$or = [
+                { title: searchRegex },
+                { subject: searchRegex },
+            ];
+        }
+
         const allTuitions = await tuitionsCollection
-            .find({
-                approvalStatus: "approved",
-                isActive: true,
-            })
+            .find(query)
             .sort({ updatedAt: -1 })
             .toArray();
 
@@ -1237,7 +1254,6 @@ app.post("/saved-tuitions", verifyToken, async (req, res) => {
         });
     }
 });
-
 
 // Remove a saved tuition
 app.delete("/saved-tuitions", verifyToken, async (req, res) => {
